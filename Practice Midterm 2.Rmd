@@ -1,0 +1,286 @@
+---
+title: "Practice Midterm 2"
+output: html_document
+date: "2025-03-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+install.packages("fpp2")
+```
+
+```{r}
+library(fpp2)
+library(forecast)
+library(TTR)
+library(ggplot2)
+library(knitr)
+
+data("arrivals")
+str(arrivals)
+
+us_arrivals <- arrivals[, "US"]
+
+autoplot(us_arrivals) + ggtitle("US Arrivals to Australia") + ylab("Number of Arrivals") + xlab("Year")
+```
+
+
+```{r}
+sma3 <- ma(us_arrivals, order=3)  
+sma6 <- ma(us_arrivals, order=6)  
+sma9 <- ma(us_arrivals, order=9)  
+
+autoplot(us_arrivals, series="Original Data") +
+  autolayer(sma3, series="SMA (3)", color="red") +
+  autolayer(sma6, series="SMA (6)", color="blue") +
+  autolayer(sma9, series="SMA (9)", color="green") +
+  ggtitle("Simple Moving Averages: US Arrivals") +
+  xlab("Year") + ylab("# of Arrivals") +
+  guides(color=guide_legend(title="Legend"))
+
+```
+
+```{r}
+forecastsma <- naive(tail(sma6, 12), h=12)
+
+autoplot(us_arrivals) +
+  autolayer(sma6, series="SMA (6)", color="blue") +
+  autolayer(forecastsma$mean, series="Forecast (SMA 6)", color="pink") +
+  ggtitle("12-Month Forecast using SMA (6)") +
+  xlab("Year") + ylab("Number of Arrivals") +
+  guides(color=guide_legend(title="Legend"))
+
+```
+I used SMA of order 6 for the forecast above, because it provides a balance between smoothing and also accounting for the trends.  
+
+My observation of the plot as the moving average order goes up is that the line becomes smoother and has much less fluctuations that show trends and seasonality. Although noise is taken away as the SMA order goes up, there is over-smoothing. 
+
+```{r}
+sesmodel <- ses(us_arrivals, h=12)
+
+autoplot(sesmodel) +
+  ggtitle("Simple Exponential Smoothing Forecast") +
+  xlab("Year") + ylab("Number of Arrivals")
+
+```
+
+```{r}
+alpha <- sesmodel$model$par[1]
+
+initial <- sesmodel$model$states[1]
+
+sigma <- sqrt(sesmodel$model$sigma2)
+
+cat("Alpha (α):", alpha, "\n")
+cat("Initial State:", initial, "\n")
+cat("Sigma (σ):", sigma, "\n")
+
+```
+
+Alpha is the smoothing parameter and determines how much weight is placed on the most recent observation (36%). Because alpha is closer to 0 (0.358286), we can determine that it is a smoother forecast which relies more on past observations and is slower to adapt to trends. 
+
+The initial value is the estimated starting value for exponential smoothing. In this case, the initial state is 29.2852, meaning that the initial estimate was 29.2852 arrivals prior to taking the data into account.
+
+Sigma is the standard deviation of the residuals in the forecast, so in this case the forecast deviates by 11.10216 arrivals from the actual values. 
+
+
+```{r}
+checkresiduals(sesmodel)
+
+hist(residuals(sesmodel), main="Histogram of Residuals", xlab="Residuals")
+
+ggplot(data = data.frame(Fitted = fitted(sesmodel), Residuals = residuals(sesmodel)), aes(x = Fitted, y = Residuals)) +
+  geom_point(color = "blue") +
+  ggtitle("Fitted Values vs Residuals") +
+  xlab("Fitted Values") + ylab("Residuals") +
+  theme_minimal()
+
+ggplot(data = data.frame(Actuals = us_arrivals, Residuals = residuals(sesmodel)), aes(x = Actuals, y = Residuals)) +
+  geom_point(color = "red") +
+  ggtitle("Actual Values vs Residuals") +
+  xlab("Actual Values") + ylab("Residuals") +
+  theme_minimal()
+
+Acf(residuals(sesmodel))
+
+accuracy(sesmodel)
+
+```
+Residuals plot: Patterns are showing instead of randomness, indicating that SES may not be the best model for the forecasting.
+
+Histogram: Residuals are not normally distributed there is some skewness, showing there is some bias, but relatively closer to normal. 
+
+Fitted vs. residuals: Points are bunches together i sections rather being evenly spread, indicating that some trends may not be accounted for. 
+
+Actual vs. residuals: There is a pattern overall and the points are increasing, again showing a biased not suitable model.
+
+ACF: The ACF plot of residuals shows that although most bars fall within the blue dotted lines indicating no clear pattern in residuals, there is some autocorrelation shown by the bars sticking out at intervals, meaning that seasonality is not being handled well.
+
+```{r}
+train_size <- length(us_arrivals) - 12 
+
+train_set <- ts(us_arrivals[1:train_size], frequency=frequency(us_arrivals), start=start(us_arrivals))
+test_set <- ts(us_arrivals[(train_size+1):length(us_arrivals)], frequency=frequency(us_arrivals), start=time(us_arrivals)[train_size+1])
+
+ses_train <- ses(train_set, h=12)
+
+forecastval <- forecast(ses_train, h=12)
+
+print(forecastval)
+
+autoplot(forecastval) +
+  ggtitle("12-Month Forecast: Simple Smoothing") +
+  xlab("Year") + ylab("# of Arrivals")
+
+print("Training Accuracy Measures:")
+train_accuracy <- accuracy(ses_train$fitted, train_set)
+rownames(train_accuracy) <- "Training Set"  # Rename row for clarity
+print(train_accuracy)
+
+print("Testing Accuracy Measures:")
+test_accuracy <- accuracy(forecastval$mean, test_set)
+rownames(test_accuracy) <- "Testing Set"  # Rename row for clarity
+print(test_accuracy)
+
+
+forecast_one_year <- tail(forecastval$mean, 1)  
+print(paste("Predicted Value in a year:", round(forecast_one_year, 2)))
+
+
+```
+Based on the accuracy measures, SES is performing fairly well, but there are some forecasting errors indicating that a model that takes into account seasonality would be better fit for this data. Overall, SES is better for short-term data without the presence of seasonality- the forecast is essentially a smoothed version continuing on from the current data rather than accounting for trends and seasonality fluctuationss.
+
+```{r}
+hw <- hw(us_arrivals, seasonal="multiplicative", h=12)
+
+autoplot(hw) +
+  ggtitle("Holt-Winters Forecast") +
+  xlab("Year") + ylab("Number of Arrivals")
+```
+
+```{r}
+alpha <- hw$model$par[1]  
+beta <- hw$model$par[2]  
+gamma <- hw$model$par[3] 
+
+initiallevel <- hw$model$states[1]
+initialtrend <- hw$model$states[2]
+initialseasonality <- hw$model$states[3]
+
+sigma <- sqrt(hw$model$sigma2)
+
+cat("Alpha (α):", alpha, "\n")
+cat("Beta (β):", beta, "\n")
+cat("Gamma (γ):", gamma, "\n")
+cat("Initial Level:", initiallevel, "\n")
+cat("Initial Trend:", initialtrend, "\n")
+cat("Initial Seasonality:", initialseasonality, "\n")
+cat("Sigma (σ):", sigma, "\n")
+
+```
+
+Alpha is the smoothing parameter and determines how much weight is placed on the most recent observation (37%). Because alpha is closer to 0 (0.3709394), we can determine that it is a smoother forecast which relies more on past observations and is slower to adapt to trends. 
+
+Beta represents how much weight is given to trend changes, and because it is very small (0.0001), we can see that the model detects minimal trends.
+
+Gamma represents the weight given to seasonality, and because the value is fairly low (0.33%), which shows that there is consistent seasonality.  
+
+The initial value is the estimated starting value for exponential smoothing. In this case, the initial state is 28.04083, meaning that the initial estimate was 28.04083 arrivals prior to taking the data into account.
+
+The initial trend estimate is 29.12435, which is used for forecasting future values.
+
+The initial seasonality shows how the first cycle of the seasonal pattern was initialized, and it is 28.46803.
+
+Sigma is the standard deviation of the residuals in the forecast, so in this case the forecast deviates by 0.1054427 arrivals from the actual values, meaning in this case that the predictionf fit the data well. 
+
+```{r}
+checkresiduals(hw)
+
+hist(residuals(hw), main="Histogram of Residuals", xlab="Residuals")
+
+ggplot(data = data.frame(Fitted = fitted(hw), Residuals = residuals(hw)), aes(x = Fitted, y = Residuals)) +
+  geom_point(color = "blue") +
+  ggtitle("Fitted Values vs Residuals") +
+  xlab("Fitted Values") + ylab("Residuals") +
+  theme_minimal()
+
+ggplot(data = data.frame(Actuals = us_arrivals, Residuals = residuals(hw)), aes(x = Actuals, y = Residuals)) +
+  geom_point(color = "red") +
+  ggtitle("Actual Values vs Residuals") +
+  xlab("Actual Values") + ylab("Residuals") +
+  theme_minimal()
+
+Acf(residuals(hw))
+
+accuracy(hw)
+```
+Residuals plot: There are not many extreme patterns in the residuals, indicating that HW is capturing trends fairly well.
+
+Histogram: There is a pretty normal distribution but slight skewness indicating some underprediction occuring in the model.
+
+Fitted values vs. Residuals: No clear pattern in the points showing that there is no string bias in the model, which is good.
+
+Actual values vs. Residuals: Randomly distributed scatterplot, also showing no major bias.
+
+ACF: Most of the bars are falling within the insignificant region, showing that there is no significant autocorrelation. 
+```{r}
+train_size <- length(us_arrivals) - 12 
+train_set <- ts(us_arrivals[1:train_size], frequency=frequency(us_arrivals), start=start(us_arrivals))
+test_set <- ts(us_arrivals[(train_size+1):length(us_arrivals)], frequency=frequency(us_arrivals), start=time(us_arrivals)[train_size+1])
+
+hw_model <- hw(train_set, seasonal="multiplicative", h=12)  
+forecasthw <- forecast(hw_model, h=12)
+
+print(forecasthw)
+
+autoplot(forecasthw) +
+  ggtitle("12-Month Forecast using Holt-Winters") +
+  xlab("Year") + ylab("Number of Arrivals")
+
+print("Training Accuracy Measures:")
+train_accuracy_hw <- accuracy(hw_model$fitted, train_set)
+rownames(train_accuracy_hw) <- "Training Set"
+print(train_accuracy_hw)
+
+print("Testing Accuracy Measures:")
+test_accuracy_hw <- accuracy(forecasthw$mean, test_set)
+rownames(test_accuracy_hw) <- "Testing Set"
+print(test_accuracy_hw)
+
+forecast_one_year_hw <- tail(forecasthw$mean, 1) 
+print(paste("Predicted Value in a year:", round(forecast_one_year_hw, 2)))
+
+```
+Based on the accuracy, the Holt-Winters model has minimal errors and indicates good forecast accuracy. To summarize, the HW model captures trends and seasonality that occur in this dataset effectively. 
+
+
+```{r}
+accuracy_table <- data.frame(
+  Method = c("SES (Training)", "SES (Testing)", "Holt-Winters (Training)", "Holt-Winters (Testing)"),
+  ME = c(1.94, 2.72, 0.11, -6.26),
+  RMSE = c(10.64, 12.38, 7.75, 10.43),
+  MAE = c(8.53, 11.58, 5.24, 8.85),
+  MPE = c(1.56, 1.28, -0.21, -5.97),
+  MAPE = c(10.87, 9.77, 6.91, 7.89),
+  ACF1 = c(0.038, 0.130, 0.044, 0.139)
+)
+
+kable(accuracy_table, caption = "Accuracy Comparison: SES vs. Holt-Winters")
+
+```
+
+Simple Exponential Smoothing (SES): A smoothing technique that emphasizes recent data but does not account for trend or seasonality
+Pros: Short-term forecasting with data that is fairly stable
+Cons: Fails to represent seasonality in this dataset
+
+Holt-Winters (HW): A smoothing technique that includes level, trend, and seasonality.
+Pros: Time series with seasonality & trends that are present
+Cons: Sensitive to parameter selections and less effective for short-term 
+
+The time series shows a clear seasonal pattern and also an upward trend, SES fails to capture the seasonality and has more errors, whereas HW captures seasonality and trends and has fewer errors making it the better forecast model. According to HW, an upward trend will continue over the next year and the next two years, with the seasonal fluctuations. 
+
+The ranking would be 1)HW and 2)SES 
+
